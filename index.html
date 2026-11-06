@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>丘の円環</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root { --ink: #222; --green: #4E7F2E; --paper: #fff; }
+  html, body { margin: 0; height: 100%; background: var(--paper); color: var(--ink); font-family: "Zen Kaku Gothic New", "Yu Gothic", "YuGothic", sans-serif; overflow: hidden; }
+  canvas { display: block; touch-action: none; }
+  #ui { position: fixed; left: 12px; top: 12px; width: min(330px, calc(100vw - 24px)); background: rgba(255,255,255,.94); padding: 12px 14px 10px; font-size: 14px; line-height: 1.55; border-left: 3px solid var(--green); }
+  #ui h1 { font-size: 20px; margin: 0; font-weight: 700; }
+  #ui .sub { font-size: 12px; margin: 2px 0 10px; }
+  #ui .row { margin: 8px 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
+  #ui button, #toggle { font: inherit; font-size: 13px; padding: 5px 10px; border: 1px solid #bbb; background: #fff; color: var(--ink); cursor: pointer; }
+  #ui button.on { border-color: var(--green); color: #fff; background: var(--green); }
+  #ui label { font-size: 13px; }
+  #help { font-size: 12px; margin-top: 10px; }
+  #credit { position: fixed; right: 8px; bottom: 6px; font-size: 11px; color: #444; background: rgba(255,255,255,.8); padding: 1px 6px; }
+  #toggle { position: fixed; left: 12px; top: 12px; display: none; }
+  #where { position: fixed; right: 12px; top: 12px; background: rgba(255,255,255,.9); padding: 4px 10px; font-size: 13px; }
+  #cross { position: fixed; left: 50%; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; border: 1.5px solid rgba(0,0,0,.55); border-radius: 50%; pointer-events: none; display: none; }
+  #joy { position: fixed; left: 22px; bottom: 30px; width: 116px; height: 116px; border-radius: 50%; border: 2px solid rgba(0,0,0,.25); background: rgba(255,255,255,.3); display: none; touch-action: none; }
+  #joy i { position: absolute; left: 38px; top: 38px; width: 40px; height: 40px; border-radius: 50%; background: rgba(0,0,0,.35); }
+  #loading { position: fixed; inset: 0; display: grid; place-items: center; font-size: 15px; background: var(--paper); }
+  @media (hover: hover) and (pointer: fine) { #help .sp { display: none; } }
+  @media (hover: none), (pointer: coarse) { #help .pc { display: none; } }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+  "three-mesh-bvh": "https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.7.6/build/index.module.js"
+} }
+</script>
+</head>
+<body>
+<div id="loading">読み込んでいます</div>
+<div id="ui">
+  <h1>丘の円環</h1>
+  <div class="sub">里山小学校　建築都市デザイン演習ⅡB　F1班</div>
+  <div class="row"><button data-mode="walk" class="on">歩く</button><button data-mode="orbit">上から見る</button><button id="hide">たたむ</button></div>
+  <div class="row" id="spots"></div>
+  <div class="row"><label>時刻 <input id="hour" type="range" min="6" max="18" step="0.25" value="10"> <span id="hourv">10:00</span></label>
+    <select id="season"><option value="172">夏至</option><option value="80" selected>春分・秋分</option><option value="355">冬至</option></select></div>
+  <div id="help"><span class="pc">画面をクリックして、マウスで向き、W A S D で歩く。Shift で走る。Esc で止まる。</span><span class="sp">左下の丸で歩き、画面をなぞって向きを変える。</span></div>
+</div>
+<button id="toggle">ひらく</button>
+<div id="where"></div>
+<div id="cross"></div>
+<div id="joy"><i></i></div>
+<div id="credit">周辺の地図 © OpenStreetMap contributors</div>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { Sky } from 'three/addons/objects/Sky.js';
+import { computeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
+THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree; THREE.Mesh.prototype.raycast = acceleratedRaycast;
+
+// 敷地座標(x東, y北, z上) → three(x, z, -y)
+const W = (x, y, z) => new THREE.Vector3(x, z, -y);
+const NORTH_ROT = THREE.MathUtils.degToRad(21.75), LAT = THREE.MathUtils.degToRad(36.03);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 0.6; renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.08, 3000);
+const sky = new Sky(); sky.scale.setScalar(5000); scene.add(sky); sky.material.uniforms.turbidity.value = 6; sky.material.uniforms.rayleigh.value = 1.4;
+const hemi = new THREE.HemisphereLight(0xe2eeff, 0x6b6a52, 0.8); scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xfff2de, 2.6); sun.castShadow = true; sun.shadow.mapSize.set(4096, 4096);
+Object.assign(sun.shadow.camera, { left: -150, right: 150, top: 150, bottom: -150, near: 1, far: 700 }); sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.04;
+scene.add(sun, sun.target);
+const far = new THREE.Mesh(new THREE.CircleGeometry(1500, 64), new THREE.MeshStandardMaterial({ color: 0x8aa06a, roughness: 1 })); far.rotation.x = -Math.PI / 2; far.position.y = -0.4; scene.add(far);
+const pmrem = new THREE.PMREMGenerator(renderer); let envRT = null;
+function setSun() {
+  const h = +hour.value, doy = +season.value; hourv.textContent = `${Math.floor(h)}:${String(Math.round((h % 1) * 60)).padStart(2, '0')}`;
+  const dec = THREE.MathUtils.degToRad(23.44) * Math.sin(2 * Math.PI * (284 + doy) / 365), ha = THREE.MathUtils.degToRad((h - 12) * 15);
+  const alt = Math.asin(Math.sin(LAT) * Math.sin(dec) + Math.cos(LAT) * Math.cos(dec) * Math.cos(ha));
+  let az = Math.acos(Math.max(-1, Math.min(1, (Math.sin(dec) - Math.sin(alt) * Math.sin(LAT)) / (Math.cos(alt) * Math.cos(LAT))))); if (ha > 0) az = 2 * Math.PI - az;
+  const a = az - NORTH_ROT; const d = new THREE.Vector3(Math.sin(a) * Math.cos(alt), Math.sin(alt), -Math.cos(a) * Math.cos(alt));
+  sky.material.uniforms.sunPosition.value.copy(d); sun.position.copy(d.clone().multiplyScalar(320)); sun.target.position.set(0, 0, 0);
+  sun.intensity = Math.max(0, Math.sin(alt)) * 3.0; hemi.intensity = 0.3 + Math.max(0, Math.sin(alt)) * 0.7;
+  if (envRT) envRT.dispose(); envRT = pmrem.fromScene(sky); scene.environment = envRT.texture;
+}
+hour.oninput = setSun; season.onchange = setSun; setSun();
+
+// ---------- 質感：その場で描く小さなテクスチャ（素材の画像は使わない） ----------
+function rnd(seed) { let s = seed; return () => (s = (s * 16807) % 2147483647) / 2147483647; }
+function canvasTex(size, draw, metres) { const c = document.createElement('canvas'); c.width = c.height = size; const g = c.getContext('2d'); draw(g, size); const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; t.repeat.set(1 / metres, 1 / metres); return t; }
+const noise = (base, amp, dots, seed, size = 256) => (g, n) => { const r = rnd(seed); g.fillStyle = base; g.fillRect(0, 0, n, n); const img = g.getImageData(0, 0, n, n); for (let i = 0; i < img.data.length; i += 4) { const v = (r() - 0.5) * amp; img.data[i] += v; img.data[i + 1] += v; img.data[i + 2] += v; } g.putImageData(img, 0, 0); for (let k = 0; k < dots; k++) { g.fillStyle = `rgba(0,0,0,${0.05 + r() * 0.08})`; const x = r() * n, y = r() * n, s = 0.5 + r() * 1.8; g.fillRect(x, y, s, s); } };
+const planks = (base, line, w, seed) => (g, n) => { noise(base, 18, 0, seed)(g, n); const r = rnd(seed + 7); g.strokeStyle = line; g.lineWidth = 2; for (let y = 0; y < n; y += w) { g.beginPath(); g.moveTo(0, y); g.lineTo(n, y); g.stroke(); const x = r() * n; g.beginPath(); g.moveTo(x, y); g.lineTo(x, y + w); g.stroke(); } for (let k = 0; k < 120; k++) { g.strokeStyle = `rgba(60,30,10,${0.04 + r() * 0.06})`; g.lineWidth = 1; const y = r() * n; g.beginPath(); g.moveTo(0, y); g.lineTo(n, y + (r() - 0.5) * 6); g.stroke(); } };
+const mottled = (cols, seed) => (g, n) => { const r = rnd(seed); g.fillStyle = cols[0]; g.fillRect(0, 0, n, n); for (let k = 0; k < 2600; k++) { g.fillStyle = cols[1 + Math.floor(r() * (cols.length - 1))]; const s = 1 + r() * 3; g.globalAlpha = 0.35 + r() * 0.5; g.fillRect(r() * n, r() * n, s, s); } g.globalAlpha = 1; };
+const pebbles = (g, n) => { const r = rnd(5); g.fillStyle = '#d9d6cc'; g.fillRect(0, 0, n, n); for (let k = 0; k < 700; k++) { const v = 200 + r() * 50; g.fillStyle = `rgb(${v},${v - 3},${v - 10})`; g.beginPath(); g.ellipse(r() * n, r() * n, 2 + r() * 5, 2 + r() * 4, r() * 3, 0, 7); g.fill(); } };
+const T = {
+  ext: canvasTex(256, noise('#c9c7bf', 22, 900, 3), 2.0),      // 外壁：明るい灰色のざらっとした面
+  plaster: canvasTex(256, noise('#eeece6', 8, 120, 4), 2.0),    // 内壁：白い漆喰
+  wood: canvasTex(256, planks('#93543a', 'rgba(40,15,5,.35)', 256, 9), 1.0), // 木の縦材・丸柱・笠木（赤茶）
+  deck: canvasTex(256, planks('#c09a6c', 'rgba(70,40,15,.45)', 24, 11), 2.0), // テラス・渡りデッキ
+  floor: canvasTex(256, planks('#c79f72', 'rgba(80,50,20,.35)', 32, 13), 2.0), // 床
+  stair: canvasTex(256, noise('#b9b6ad', 16, 300, 14), 1.0),
+  roof: canvasTex(256, noise('#b3b0a7', 18, 400, 15), 2.0),
+  asphalt: canvasTex(256, noise('#4a4c50', 26, 1600, 16), 2.0),
+  grass: canvasTex(256, mottled(['#6f9a46', '#5d8a3a', '#86ab52', '#4f7a33', '#9bb766'], 17), 3.0),
+  soil: canvasTex(256, mottled(['#7d5a3e', '#6b4c33', '#8f6a48', '#5e4430'], 18), 2.0),
+  rice: canvasTex(256, mottled(['#7aa36b', '#6b9a5f', '#8db27a', '#5f8f61'], 19), 2.0),
+  sand: canvasTex(256, mottled(['#cfab78', '#c19b68', '#dab887', '#b8925f', '#8c6f4e'], 20), 3.0),
+  gravel: canvasTex(256, pebbles, 1.0),
+  tpath: canvasTex(256, mottled(['#d8d0bd', '#c8bfa9', '#e2dbc9'], 21), 2.0),
+};
+const C = (c, o = {}) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.92, ...o });
+const MAT = {
+  ceil: C(0xffffff, { map: T.plaster }), ext: C(0xffffff, { map: T.ext }), wall: C(0xffffff, { map: T.ext }), plaster: C(0xffffff, { map: T.plaster }), wood: C(0xffffff, { map: T.wood, roughness: 0.75 }),
+  deck: C(0xffffff, { map: T.deck }), deckroof: C(0xffffff, { map: T.deck }), floor: C(0xffffff, { map: T.floor, roughness: 0.7 }), stair: C(0xffffff, { map: T.stair }), roof: C(0xffffff, { map: T.roof }),
+  asphalt: C(0xffffff, { map: T.asphalt }), path: C(0xffffff, { map: T.asphalt }), grass: C(0xffffff, { map: T.grass }), ground: C(0xffffff, { map: T.grass }), soil: C(0xffffff, { map: T.soil }),
+  rice: C(0xffffff, { map: T.rice }), sand: C(0xffffff, { map: T.sand }), gravel: C(0xffffff, { map: T.gravel }), tpath: C(0xffffff, { map: T.tpath }),
+  glass: new THREE.MeshPhysicalMaterial({ color: 0xdfeef5, metalness: 0, roughness: 0.04, transparent: true, opacity: 0.22, envMapIntensity: 1.4, side: THREE.DoubleSide, depthWrite: false }),
+  railglass: new THREE.MeshPhysicalMaterial({ color: 0xe6f2f5, metalness: 0, roughness: 0.05, transparent: true, opacity: 0.18, envMapIntensity: 1.2, side: THREE.DoubleSide, depthWrite: false }),
+  mullion: C(0x3a3d40, { roughness: 0.45, metalness: 0.3 }),
+  water: C(0x3b4a50, { roughness: 0.08, metalness: 0.1, envMapIntensity: 1.5 }), poolwater: new THREE.MeshPhysicalMaterial({ color: 0x5f9fb3, roughness: 0.05, transparent: true, opacity: 0.7, envMapIntensity: 1.3 }),
+  line: C(0xf3f2ec), hole: C(0x3c4634), hedge: C(0x3f6a2e), flower: C(0xe39ab4), stone: C(0x958f84), trunk: C(0x5f4632), leaf: C(0x5f8a3e), leaf2: C(0x4b7234),
+  osmb: C(0xe2ded4), road: C(0x606266), road2: C(0x54565a), forest: C(0x5c7c46), osmfarm: C(0xa89f78),
+};
+
+// ---------- モデル ----------
+const walkables = [], colliders = [];
+const loader = new GLTFLoader();
+Promise.all([loader.loadAsync('model.glb'), fetch('spots.json').then(r => r.json())]).then(([g, spots]) => {
+  g.scene.traverse(o => { if (!o.isMesh) return; const ex = o.userData || {}; o.material = MAT[o.name] || MAT[o.material.name] || C(0xcccccc);
+    const tr = o.material.transparent; o.castShadow = !tr && !/^(osmb|road|road2|forest|osmfarm|line)$/.test(o.name); o.receiveShadow = true;
+    o.geometry.computeBoundsTree(); if (ex.walk !== false) walkables.push(o); if (ex.collide !== false) colliders.push(o); });
+  scene.add(g.scene); document.getElementById('loading').remove();
+  const el = document.getElementById('spots'); for (const s of spots) { const b = document.createElement('button'); b.textContent = s.name; b.onclick = () => goto(s); el.appendChild(b); }
+  window.__spots = spots; goto(spots[0]); ready = true;
+}).catch(e => { document.getElementById('loading').textContent = '読み込めませんでした：' + e.message; });
+
+// ---------- 歩く ----------
+const EYE = 1.45, STEP = 0.55, R = 0.28; let vy = 0, yaw = 0, pitch = 0, mode = 'walk', ready = false;
+const pos = new THREE.Vector3(); const keys = {}; const ray = new THREE.Raycaster(); ray.firstHitOnly = true;
+function goto(s) { pos.copy(W(s.p[0], s.p[1], s.p[2] + 0.05 + EYE)); face(s.look[0], s.look[1]); pitch = 0; vy = 0; if (mode == 'orbit') setMode('walk'); }
+function face(x, y) { const t = W(x, y, 0); yaw = Math.atan2(-(t.x - pos.x), -(t.z - pos.z)); }
+function groundAt(p, from) { ray.set(new THREE.Vector3(p.x, from, p.z), new THREE.Vector3(0, -1, 0)); ray.far = 80; const h = ray.intersectObjects(walkables, false)[0]; return h ? h.point.y : -0.3; }
+// 進む向きに壁があれば、その面の法線を返す（無ければ null）
+function hitNormal(p, dir, dist) { for (const hgt of [0.62, 1.2, 1.75]) { ray.set(new THREE.Vector3(p.x, p.y - EYE + hgt, p.z), dir); ray.far = dist + R; const h = ray.intersectObjects(colliders, false)[0];
+  if (h && h.face) { const n = h.face.normal.clone().transformDirection(h.object.matrixWorld); n.y = 0; if (n.lengthSq() < 1e-6) n.copy(dir).negate(); n.normalize(); if (n.dot(dir) > 0) n.negate(); return n; } } return null; }
+function tryMove(mv) { const d = mv.length(); if (d < 1e-6) return false; const dir = mv.clone().normalize(); if (hitNormal(pos, dir, d)) return false;
+  const np = pos.clone().add(mv); const gy = groundAt(np, pos.y - EYE + STEP); if (gy > pos.y - EYE + STEP) return false; pos.copy(np); return true; }
+function physics(dt, f, s, run) {
+  const sp = (run ? 6 : 2.6) * dt; const l = Math.hypot(f, s); if (l > 1) { f /= l; s /= l; }
+  const fw = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw)), rt = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
+  const mv = fw.multiplyScalar(f * sp).add(rt.multiplyScalar(s * sp));
+  // まっすぐ進めなければ、当たった壁に沿って滑らせる
+  if (!tryMove(mv) && mv.lengthSq() > 1e-10) { const n = hitNormal(pos, mv.clone().normalize(), mv.length()); if (n) { const slide = mv.clone().sub(n.multiplyScalar(mv.dot(n))); if (!tryMove(slide)) { tryMove(new THREE.Vector3(slide.x, 0, 0)) || tryMove(new THREE.Vector3(0, 0, slide.z)); } } else { tryMove(new THREE.Vector3(mv.x, 0, 0)) || tryMove(new THREE.Vector3(0, 0, mv.z)); } }
+  const gy = groundAt(pos, pos.y - EYE + STEP), feet = pos.y - EYE;
+  if (feet > gy + 0.02) { vy -= 9.8 * dt; pos.y = Math.max(gy + EYE, pos.y + vy * dt); } else { vy = 0; pos.y = gy + EYE; } }
+// 確かめる道具（ブラウザのコンソールから）：敷地座標で今の位置と、ある点まで歩かせた結果
+window.__walk = { hits(x, y, z, tx, ty) { const o = W(x, y, z), d = W(tx, ty, z).sub(o); const L = d.length(); ray.set(o, d.normalize()); ray.far = L; ray.firstHitOnly = false; const h = ray.intersectObjects(colliders, false).map(h => h.object.name + '@' + h.distance.toFixed(2)); ray.firstHitOnly = true; return h; }, here: () => [pos.x, -pos.z, pos.y - EYE].map(v => +v.toFixed(2)), go: (x, y, z) => { pos.copy(W(x, y, z + EYE)); vy = 0; },
+  to(x, y, maxSec = 40) { const dt = 1 / 30; for (let i = 0; i < maxSec / dt; i++) { face(x, y); const d = Math.hypot(pos.x - x, -pos.z - y); if (d < 0.6) return { ok: true, at: this.here(), sec: +(i * dt).toFixed(1) }; physics(dt, 1, 0, false); } return { ok: false, at: this.here() }; } };
+addEventListener('keydown', e => { keys[e.code] = true; }); addEventListener('keyup', e => { keys[e.code] = false; });
+const canvas = renderer.domElement;
+canvas.addEventListener('click', () => { if (mode == 'walk' && matchMedia('(pointer: fine)').matches) canvas.requestPointerLock(); });
+document.addEventListener('pointerlockchange', () => { cross.style.display = document.pointerLockElement ? 'block' : 'none'; });
+document.addEventListener('mousemove', e => { if (document.pointerLockElement !== canvas) return; yaw -= e.movementX * 0.0022; pitch = Math.max(-1.4, Math.min(1.4, pitch - e.movementY * 0.0022)); });
+const joy = document.getElementById('joy'), knob = joy.firstElementChild; let jx = 0, jy = 0, jid = null, lid = null, lx = 0, ly = 0;
+const coarse = matchMedia('(pointer: coarse)').matches; if (coarse) joy.style.display = 'block';
+joy.addEventListener('pointerdown', e => { jid = e.pointerId; joy.setPointerCapture(jid); mv(e); });
+joy.addEventListener('pointermove', e => { if (e.pointerId == jid) mv(e); });
+joy.addEventListener('pointerup', () => { jid = null; jx = jy = 0; knob.style.transform = ''; });
+function mv(e) { const r = joy.getBoundingClientRect(); let dx = (e.clientX - r.left - 58) / 48, dy = (e.clientY - r.top - 58) / 48; const l = Math.hypot(dx, dy); if (l > 1) { dx /= l; dy /= l; } jx = dx; jy = dy; knob.style.transform = `translate(${dx * 38}px, ${dy * 38}px)`; }
+canvas.addEventListener('pointerdown', e => { if (mode != 'walk' || e.pointerType == 'mouse') return; lid = e.pointerId; lx = e.clientX; ly = e.clientY; });
+canvas.addEventListener('pointermove', e => { if (e.pointerId !== lid) return; yaw -= (e.clientX - lx) * 0.005; pitch = Math.max(-1.4, Math.min(1.4, pitch - (e.clientY - ly) * 0.005)); lx = e.clientX; ly = e.clientY; });
+canvas.addEventListener('pointerup', e => { if (e.pointerId === lid) lid = null; });
+// 上から見る
+const orbit = new OrbitControls(camera, canvas); orbit.enabled = false; orbit.maxPolarAngle = Math.PI / 2.05;
+function setMode(m) { mode = m; document.querySelectorAll('[data-mode]').forEach(b => b.classList.toggle('on', b.dataset.mode == m));
+  if (m == 'orbit') { document.exitPointerLock?.(); orbit.enabled = true; camera.position.set(150, 160, 170); orbit.target.set(0, 0, -10); orbit.update(); joy.style.display = 'none'; }
+  else { orbit.enabled = false; if (coarse) joy.style.display = 'block'; } }
+document.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => setMode(b.dataset.mode));
+hide.onclick = () => { ui.style.display = 'none'; toggle.style.display = 'block'; }; toggle.onclick = () => { ui.style.display = ''; toggle.style.display = 'none'; };
+const clock = new THREE.Clock();
+function tick() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (mode == 'walk' && ready) {
+    const f = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0) - jy, s = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0) + jx;
+    physics(dt, f, s, keys.ShiftLeft || keys.ShiftRight);
+    camera.position.copy(pos); camera.rotation.set(pitch, yaw, 0, 'YXZ'); where.textContent = `高さ +${(pos.y - EYE).toFixed(1)}m`;
+  } else if (mode == 'orbit') { orbit.update(); where.textContent = 'ドラッグで回す・ホイールで寄る'; }
+  renderer.render(scene, camera); requestAnimationFrame(tick);
+}
+tick();
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+</script>
+</body>
+</html>
